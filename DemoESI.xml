@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<EtherCATInfo>
+  <Vendor><Id>#x0000FFFF</Id><Name>EtherCAT Bench Demo</Name></Vendor>
+  <Descriptions><Devices><Device>
+    <Type ProductCode="#x92520001" RevisionNo="#x00010000">LAN9252 Demo</Type>
+    <Name>MCU + LAN9252 模拟从站</Name>
+    <Profile>
+      <Dictionary>
+        <DataTypes>
+          <DataType><Name>DT1018</Name><BitSize>144</BitSize>
+            <SubItem><SubIdx>0</SubIdx><Name>项目数</Name><Type>USINT</Type><BitSize>8</BitSize><BitOffs>0</BitOffs><Flags><Access>ro</Access></Flags></SubItem>
+            <SubItem><SubIdx>1</SubIdx><Name>Vendor ID</Name><Type>UDINT</Type><BitSize>32</BitSize><BitOffs>16</BitOffs><Flags><Access>ro</Access></Flags></SubItem>
+            <SubItem><SubIdx>2</SubIdx><Name>Product Code</Name><Type>UDINT</Type><BitSize>32</BitSize><BitOffs>48</BitOffs><Flags><Access>ro</Access></Flags></SubItem>
+            <SubItem><SubIdx>3</SubIdx><Name>Revision</Name><Type>UDINT</Type><BitSize>32</BitSize><BitOffs>80</BitOffs><Flags><Access>ro</Access></Flags></SubItem>
+            <SubItem><SubIdx>4</SubIdx><Name>Serial Number</Name><Type>UDINT</Type><BitSize>32</BitSize><BitOffs>112</BitOffs><Flags><Access>ro</Access></Flags></SubItem>
+          </DataType>
+        </DataTypes>
+        <Objects>
+          <Object><Index>#x1018</Index><Name>Identity</Name><Type>DT1018</Type><BitSize>144</BitSize><Flags><Access>ro</Access></Flags></Object>
+          <Object><Index>#x2000</Index><Name>测试参数</Name><Type>UINT</Type><BitSize>16</BitSize><Flags><Access>rw</Access></Flags></Object>
+        </Objects>
+      </Dictionary>
+    </Profile>
+    <RxPdo Fixed="1" Sm="2">
+      <Index>#x1600</Index><Name>测试输出</Name>
+      <Entry><Index>#x7000</Index><SubIndex>1</SubIndex><BitLen>16</BitLen><Name>测试序号</Name><DataType>UINT</DataType></Entry>
+    </RxPdo>
+    <TxPdo Fixed="1" Sm="3">
+      <Index>#x1A00</Index><Name>测试反馈</Name>
+      <Entry><Index>#x6000</Index><SubIndex>1</SubIndex><BitLen>16</BitLen><Name>已处理序号</Name><DataType>UINT</DataType></Entry>
+    </TxPdo>
+    <Dc>
+      <OpMode>
+        <Name>DC SYNC0</Name>
+        <Desc>模拟从站 SYNC0</Desc>
+        <AssignActivate>#x0300</AssignActivate>
+        <CycleTimeSync0>1000000</CycleTimeSync0>
+      </OpMode>
+    </Dc>
+  </Device></Devices></Descriptions>
+</EtherCATInfo>
