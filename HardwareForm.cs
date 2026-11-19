@@ -19,6 +19,8 @@ namespace EtherCatBench
         readonly Timer refresh = new Timer { Interval = 100 };
         readonly ComboBox adapter = ListBox(360), devices = ListBox(330), dcModes = ListBox(260);
         readonly NumericUpDown cycleMs = new NumericUpDown { Minimum = 1, Maximum = 2000, Value = 10, Width = 68 };
+        readonly CheckBox earlyWake = new CheckBox { AutoSize = true, Text = "提前唤醒 + 短自旋",
+            Margin = new Padding(8, 7, 3, 0) };
         readonly NumericUpDown hz = new NumericUpDown { Minimum = 1, Maximum = 1000000, Value = 1000, DecimalPlaces = 3, Width = 110 };
         readonly Label status = LabelFor(""), detail = LabelFor(""), request = LabelFor("请选择专用有线网口，再点击连接 / 扫描。");
         readonly Label match = LabelFor("请导入产品 ESI"), raw = LabelFor(""), dcPreview = LabelFor(""), dcActive = LabelFor("");
@@ -33,6 +35,12 @@ namespace EtherCatBench
         readonly Button connect, disconnect, listAdapters, arm, disarm, send, openEsi, demo, csvStart, csvStop;
         readonly Button[] states;
         Button applyDc;
+        Button traceStart, traceSave;
+        readonly CheckBox traceLong = new CheckBox { AutoSize = true, Text = "长跑 10 分钟",
+            Margin = new Padding(7, 7, 4, 0) };
+        readonly Label traceProgress = LabelFor("普通采样最多 120,000 周期。");
+        bool tracing;
+        PdoTrace unsavedTrace;
         HardwareFrame previous;
         PdoField[] tableMapping;
         EsiDevice tableDevice;
@@ -83,7 +91,9 @@ namespace EtherCatBench
             refreshButton = ButtonFor("刷新网卡", delegate { LoadAdapters(); });
             connectButton = ButtonFor("连接 / 扫描", async delegate {
                 var nic = adapter.SelectedItem as HardwareAdapter;
-                if (nic != null) await Execute("连接 " + nic.Label, async delegate { await bus.Connect(nic.Id, (int)cycleMs.Value); });
+                if (nic != null) await Execute("连接 " + nic.Label, async delegate {
+                    await bus.Connect(nic.Id, (int)cycleMs.Value, earlyWake.Checked);
+                });
             });
             disconnectButton = ButtonFor("断开", async delegate {
                 await Execute("断开", async delegate { await bus.Disconnect(); });
@@ -99,11 +109,12 @@ namespace EtherCatBench
                 await Execute("请求 " + HardwareBus.StateName(value), async delegate { await bus.RequestState(value); });
             })).ToArray();
             section.Controls.Add(HeaderBar(stateButtons.Cast<Control>().Concat(new Control[] {
-                LabelFor("主站 PDO 目标周期 (ms)"), cycleMs, LabelFor("连接时采用")
+                LabelFor("主站 PDO 目标周期 (ms)"), cycleMs, earlyWake, LabelFor("连接时采用")
             }).ToArray()), 0, 2);
             section.Controls.Add(HeaderBar(status, detail), 0, 3);
             section.Controls.Add(HeaderBar(request), 0, 4);
             adapter.SelectedIndexChanged += delegate { DrawActions(bus.Frame); };
+            cycleMs.ValueChanged += delegate { DrawActions(bus.Frame); };
             return section;
         }
 
@@ -175,11 +186,21 @@ namespace EtherCatBench
         TabPage BuildLog(out Button start, out Button stop)
         {
             var page = new TabPage("日志");
-            var layout = RowsWithFill(40);
+            var layout = RowsWithFill(40, 40);
             start = ButtonFor("记录 CSV…", delegate { StartCsv(); });
             stop = ButtonFor("停止记录", delegate { CloseCsv(); Render(); });
             layout.Controls.Add(Bar(start, stop, LabelFor("按界面刷新频率采样过程数据与 WKC。")), 0, 0);
-            layout.Controls.Add(log, 0, 1);
+            traceStart = ButtonFor("开始 PDO 分段采样", async delegate {
+                var buffer = new PdoTrace(traceLong.Checked);
+                await Execute("开始逐周期 PDO 采样", async delegate {
+                    await bus.StartTrace(buffer);
+                    tracing = true;
+                });
+            });
+            traceSave = ButtonFor("保存 PDO 计时…", async delegate { await SavePdoTrace(); });
+            layout.Controls.Add(Bar(traceStart, traceSave, traceLong, traceProgress), 0, 1);
+            traceLong.CheckedChanged += delegate { DrawActions(bus.Frame); };
+            layout.Controls.Add(log, 0, 2);
             page.Controls.Add(layout);
             return page;
         }
@@ -425,6 +446,7 @@ namespace EtherCatBench
             disconnect.Enabled = ready && current.Connected;
             demo.Enabled = ready && !current.Connected;
             adapter.Enabled = listAdapters.Enabled = cycleMs.Enabled = ready && !current.Connected;
+            earlyWake.Enabled = cycleMs.Enabled && cycleMs.Value == 1;
             openEsi.Enabled = devices.Enabled = ready;
             foreach (var button in states) button.Enabled = ready && current.Online;
             applyDc.Enabled = ready && current.Connected && current.Online;
@@ -434,6 +456,14 @@ namespace EtherCatBench
             send.Enabled = ready && current.Armed && current.AlMisses == 0 && HardwareBus.MatchesMapping(current, SelectedDevice);
             csvStart.Enabled = csv == null;
             csvStop.Enabled = csv != null;
+            traceStart.Enabled = ready && !tracing && unsavedTrace == null && current.Online &&
+                (current.State == 4 || current.State == 8) && current.Expected > 0;
+            traceSave.Enabled = ready && (tracing || unsavedTrace != null);
+            traceLong.Enabled = ready && !tracing && unsavedTrace == null;
+            traceProgress.Text = tracing ? string.Format(CultureInfo.CurrentCulture, "{0} · {1:F0} 秒 · {2:N0} 周期",
+                current.TraceRecording ? "采样中" : "采样已停止，可保存", current.TraceSeconds, current.TraceSamples) :
+                unsavedTrace != null ? "采样待保存" :
+                traceLong.Checked ? "采满 10 分钟后自动停止。" : "普通采样最多 120,000 周期。";
             UpdateHandActions(current, ready);
         }
 
@@ -479,6 +509,28 @@ namespace EtherCatBench
                 lastLoggedCycle = f.Cycles;
             }
             catch (IOException error) { CloseCsv(); SetMessage(error.Message); }
+        }
+
+        async Task SavePdoTrace()
+        {
+            await Execute("保存 PDO 计时", async delegate {
+                if (tracing)
+                {
+                    unsavedTrace = await bus.StopTrace();
+                    tracing = false;
+                }
+                if (unsavedTrace == null || closing || closePending) return;
+                using (var dialog = new SaveFileDialog { Filter = "CSV (*.csv)|*.csv",
+                    FileName = "ethercat-timing-detail-" + DateTime.Now.ToString("yyyyMMdd-HHmmss") + ".csv" })
+                {
+                    if (dialog.ShowDialog(this) != DialogResult.OK) return;
+                    var recording = unsavedTrace;
+                    string file = dialog.FileName;
+                    int count = await Task.Run(() => recording.Save(file));
+                    unsavedTrace = null;
+                    if (!closing && !closePending) AppendLog("已保存 " + count + " 个 PDO 周期 · " + file);
+                }
+            });
         }
 
         void CloseCsv()
@@ -542,7 +594,8 @@ namespace EtherCatBench
                 current.CycleMs, current.LastIntervalMs, current.AverageIntervalMs, current.MaxIntervalMs);
             if (current.CycleMs == 1)
                 summary += "  ·  跳过时隙 " + current.MissedSlots +
-                    (current.HighResolutionTimer ? "  ·  高分辨率计时" : "  ·  短时自旋");
+                    (current.HighResolutionTimer ? current.EarlyWake ? "  ·  提前唤醒 + 短自旋" :
+                        "  ·  高分辨率计时" : "  ·  短时自旋（计时器回退）");
             return summary;
         }
 

@@ -25,6 +25,10 @@ namespace EtherCatBench
 
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
         static extern IntPtr LoadLibraryEx(string path, IntPtr reserved, uint flags);
+        [DllImport("kernel32.dll", CharSet = CharSet.Ansi, ExactSpelling = true)]
+        static extern IntPtr GetProcAddress(IntPtr module, string symbol);
+
+        internal static bool HasTimedCycle { get; private set; }
 
         public static void Load()
         {
@@ -44,6 +48,7 @@ namespace EtherCatBench
             bridge = LoadLibraryEx(file, IntPtr.Zero, 0x00000100 | 0x00000800);
             if (bridge == IntPtr.Zero) throw new Win32Exception(Marshal.GetLastWin32Error(), "SOEM 桥接库无法加载。");
             if (tb_version() != 3) throw new InvalidOperationException(mismatch);
+            HasTimedCycle = Stopwatch.IsHighResolution && GetProcAddress(bridge, "tb_cycle_timed") != IntPtr.Zero;
             compatible = true;
         }
 
@@ -62,6 +67,9 @@ namespace EtherCatBench
             out int outputBits, out int inputBits, out int expectedWkc);
         [DllImport(Library, CallingConvention = C)]
         internal static extern int tb_cycle(byte[] output, int outputLength, [Out] byte[] input, int inputLength);
+        [DllImport(Library, CallingConvention = C)]
+        internal static extern int tb_cycle_timed(byte[] output, int outputLength, [Out] byte[] input,
+            int inputLength, out long sendTicks, out long receiveTicks);
         [DllImport(Library, CallingConvention = C)]
         internal static extern int tb_sdo(int write, ushort index, byte sub, [In, Out] byte[] data, ref int size, out uint abort);
         [DllImport(Library, CallingConvention = C)] internal static extern int tb_dc(uint assign, uint ns, int shift);
@@ -141,7 +149,10 @@ namespace EtherCatBench
         public long AlTimeouts;
         public double LastIntervalMs, MaxIntervalMs, AverageIntervalMs;
         public long MissedSlots;
-        public bool HighResolutionTimer;
+        public int TraceSamples;
+        public double TraceSeconds;
+        public bool TraceRecording;
+        public bool HighResolutionTimer, EarlyWake;
         public uint DcNs;
         public string Note;
         public byte[] Rx, Tx;
@@ -177,6 +188,7 @@ namespace EtherCatBench
 
     sealed class PdoTimer : WaitHandle
     {
+        internal const int SpinLeadUs = 500;
         const uint HighResolution = 0x2;
         const uint ModifyAndWait = 0x00100002;
         const long UnitsPerSecond = 10000000;
@@ -197,18 +209,24 @@ namespace EtherCatBench
             if (IsHighResolution) SafeWaitHandle = new SafeWaitHandle(nativeTimer, true);
         }
 
-        public void WaitUntil(long deadline)
+        public long? WaitUntil(long deadline, bool measure, bool earlyWake)
         {
             long remaining = deadline - Stopwatch.GetTimestamp();
-            if (remaining <= 0) return;
-            if (IsHighResolution)
+            if (remaining <= 0) return null;
+            long? waitOffset = null;
+            long timerRemaining = remaining - (earlyWake ? Stopwatch.Frequency * SpinLeadUs / 1000000 : 0);
+            if (IsHighResolution && timerRemaining > 0)
             {
-                long due = -Math.Max(1, remaining * UnitsPerSecond / Stopwatch.Frequency);
+                long due = -Math.Max(1, timerRemaining * UnitsPerSecond / Stopwatch.Frequency);
                 if (SetWaitableTimer(SafeWaitHandle, ref due, 0, IntPtr.Zero, IntPtr.Zero, false))
+                {
                     WaitOne(4);
+                    if (measure) waitOffset = Stopwatch.GetTimestamp() - deadline;
+                }
                 else IsHighResolution = false;
             }
             while (Stopwatch.GetTimestamp() < deadline) Thread.SpinWait(16);
+            return waitOffset;
         }
 
         internal static long Advance(long deadline, long period, long finishedAt, out long missed)
@@ -233,8 +251,13 @@ namespace EtherCatBench
         long cycles, badWkc, nextStatus, nextPublish, lastCycle, nextFastCycle, intervalSamples, missedSlots;
         double lastIntervalMs, maxIntervalMs, intervalSumMs;
         bool highResolutionTimer;
+        bool earlyWake;
         uint dcNs;
         byte[] rx, tx, lastRx;
+        PdoTrace trace;
+        bool traceRecording;
+        long traceAlTicks;
+        long? lastAlSampleTicks;
         SlaveIdentity identity;
         PdoField[] actualMapping;
         string note = "";
@@ -278,7 +301,7 @@ namespace EtherCatBench
             return result.Task;
         }
 
-        public Task<int> Connect(string adapter, int interval)
+        public Task<int> Connect(string adapter, int interval, bool useEarlyWake = false)
         {
             return Submit(delegate {
                 Close();
@@ -293,6 +316,7 @@ namespace EtherCatBench
                 cycles = badWkc = 0;
                 ResetTiming();
                 cycleMs = interval;
+                earlyWake = interval == 1 && useEarlyWake;
                 try
                 {
                     if (Volatile.Read(ref stopRequested) != 0)
@@ -329,6 +353,29 @@ namespace EtherCatBench
         public Task<bool> Disconnect()
         {
             return Submit(delegate { Close(); return true; });
+        }
+
+        public Task<bool> StartTrace(PdoTrace buffer)
+        {
+            return Submit(delegate {
+                if (!CanExchange()) throw new InvalidOperationException("请先进入 SAFE-OP 或 OP。");
+                if (trace != null) throw new InvalidOperationException("请先保存上一次 PDO 采样。");
+                trace = buffer;
+                traceAlTicks = 0;
+                trace.Start(time.ElapsedTicks);
+                traceRecording = true;
+                return true;
+            });
+        }
+
+        public Task<PdoTrace> StopTrace()
+        {
+            return Submit(delegate {
+                FinishTrace(time.ElapsedTicks);
+                var recording = trace;
+                trace = null;
+                return recording;
+            });
         }
 
         public Task<int> RequestState(int target)
@@ -633,11 +680,12 @@ namespace EtherCatBench
                 {
                     long now = time.ElapsedMilliseconds;
                     Action command;
+                    long? waitOffset = null;
                     if (cycleMs == 1 && CanExchange())
                     {
                         if (precision == null) precision = new PdoTimer();
                         if (!commands.TryTake(out command, 0) && nextFastCycle != 0)
-                            precision.WaitUntil(nextFastCycle);
+                            waitOffset = precision.WaitUntil(nextFastCycle, traceRecording, earlyWake);
                         highResolutionTimer = precision.IsHighResolution;
                     }
                     else
@@ -648,6 +696,7 @@ namespace EtherCatBench
                     }
                     if (command != null) command();
                     if (Volatile.Read(ref stopRequested) != 0) break;
+                    if (traceRecording && trace.HasExpired(time.ElapsedTicks)) FinishTrace(time.ElapsedTicks);
                     if (!connected) continue;
 
                     // 先发到期的 1 ms PDO，再做周期状态轮询。
@@ -659,7 +708,7 @@ namespace EtherCatBench
                         if (nextFastCycle == 0) nextFastCycle = tick;
                         if (tick >= nextFastCycle)
                         {
-                            Exchange();
+                            Exchange(nextFastCycle, waitOffset);
                             long missed;
                             nextFastCycle = PdoTimer.Advance(nextFastCycle, oneMillisecond,
                                 Stopwatch.GetTimestamp(), out missed);
@@ -702,9 +751,13 @@ namespace EtherCatBench
             }
         }
 
-        void Exchange()
+        void Exchange(long deadline = 0, long? waitOffset = null)
         {
             long now = time.ElapsedTicks;
+            if (traceRecording && trace.HasExpired(now)) FinishTrace(now);
+            long? dispatchOffset = traceRecording && deadline != 0
+                ? (long?)(Stopwatch.GetTimestamp() - deadline) : null;
+            long interval = lastCycle == 0 ? 0 : now - lastCycle;
             if (lastCycle != 0)
             {
                 lastIntervalMs = 1000d * (now - lastCycle) / Stopwatch.Frequency;
@@ -713,8 +766,24 @@ namespace EtherCatBench
                 intervalSamples++;
             }
             lastCycle = now;
-            wkc = Soem.tb_cycle(rx, rx.Length, tx, tx.Length);
+            long send = -1, receive = -1;
+            wkc = traceRecording && Soem.HasTimedCycle
+                ? Soem.tb_cycle_timed(rx, rx.Length, tx, tx.Length, out send, out receive)
+                : Soem.tb_cycle(rx, rx.Length, tx, tx.Length);
             cycles++;
+            if (traceRecording)
+            {
+                bool hasSpace = trace.Add(new PdoTrace.Sample {
+                    Start = now, Interval = interval, Duration = time.ElapsedTicks - now, Skipped = missedSlots,
+                    Wkc = wkc, Expected = expected, State = state, WaitOffset = waitOffset,
+                    DispatchOffset = dispatchOffset, Al = traceAlTicks, Send = send, Receive = receive,
+                    SpinLeadUs = earlyWake ? PdoTimer.SpinLeadUs : 0,
+                    AlStatusCode = link.AlMisses == 0 && lastAlSampleTicks.HasValue ? (int?)al : null,
+                    AlStatusAge = link.AlMisses == 0 ? now - lastAlSampleTicks : null
+                });
+                traceAlTicks = 0;
+                if (!hasSpace) FinishTrace(time.ElapsedTicks);
+            }
             if (expected > 0 && wkc == expected)
             {
                 link.ObservePdo(time.ElapsedMilliseconds);
@@ -732,11 +801,14 @@ namespace EtherCatBench
         {
             if (lost) return false;
             int observedState, observedAl;
+            long alStart = traceRecording ? time.ElapsedTicks : 0;
             bool replied = Soem.tb_status(out observedState, out observedAl) == 1;
+            if (traceRecording) traceAlTicks += time.ElapsedTicks - alStart;
             int previousMisses = link.AlMisses;
             bool confirmedLoss = link.ObserveAl(replied, time.ElapsedMilliseconds);
             if (replied)
             {
+                lastAlSampleTicks = time.ElapsedTicks;
                 if (previousMisses > 0)
                     RecordEvent("AL 状态查询恢复，之前连续超时 " + previousMisses + " 次。");
                 if (online && (state != observedState || al != observedAl))
@@ -773,6 +845,7 @@ namespace EtherCatBench
 
         void Close()
         {
+            FinishTrace(time.ElapsedTicks);
             if (connected)
             {
                 LockOutputs();
@@ -781,13 +854,22 @@ namespace EtherCatBench
             }
             connected = online = armed = mapped = lost = false;
             expected = wkc = state = al = 0;
+            lastAlSampleTicks = null;
             outBits = inBits = 0;
             dcNs = 0;
             highResolutionTimer = false;
+            earlyWake = false;
             nextFastCycle = 0;
             rx = tx = lastRx = null;
             link.ClearPdo();
             actualMapping = null;
+        }
+
+        void FinishTrace(long now)
+        {
+            if (!traceRecording) return;
+            traceRecording = false;
+            trace.Finish(now);
         }
 
         void Publish()
@@ -799,7 +881,9 @@ namespace EtherCatBench
                 OutBits = outBits, InBits = inBits,
                 LastIntervalMs = lastIntervalMs, MaxIntervalMs = maxIntervalMs, DcNs = dcNs, Note = note,
                 AverageIntervalMs = intervalSamples == 0 ? 0 : intervalSumMs / intervalSamples,
-                MissedSlots = missedSlots, HighResolutionTimer = highResolutionTimer,
+                MissedSlots = missedSlots, HighResolutionTimer = highResolutionTimer, EarlyWake = earlyWake,
+                TraceSamples = trace == null ? 0 : trace.Count, TraceRecording = traceRecording,
+                TraceSeconds = trace == null ? 0 : trace.ElapsedSeconds(time.ElapsedTicks, traceRecording),
                 Mapping = actualMapping,
                 Rx = lastRx == null || !online || expected <= 0 || wkc != expected ? null : (byte[])lastRx.Clone(),
                 Tx = tx == null || !online || expected <= 0 || wkc != expected ? null : (byte[])tx.Clone()

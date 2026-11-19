@@ -1,4 +1,6 @@
 /dist/
+/tauri-monitor/src-tauri/target/
+/tauri-monitor/src-tauri/gen/
 /ConnectionCheck/
 /DcApply/
 /FrameCheck/

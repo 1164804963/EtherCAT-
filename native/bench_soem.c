@@ -493,11 +493,14 @@ TB_EXPORT int tb_map(int online_outbits, int online_inbits,
     return 1;
 }
 
-TB_EXPORT int tb_cycle(const uint8_t *output, int olen,
-                       uint8_t *input, int ilen)
+static int tb_cycle_impl(const uint8_t *output, int olen, uint8_t *input, int ilen,
+                         int64_t *send_ticks, int64_t *receive_ticks)
 {
     int sent;
     int wkc;
+    LARGE_INTEGER before;
+    LARGE_INTEGER after;
+    BOOL timing;
 
     if (!g_open || !g_mapped)
         return -1;
@@ -514,11 +517,17 @@ TB_EXPORT int tb_cycle(const uint8_t *output, int olen,
     if (olen > 0)
         memcpy(g_ctx.slavelist[1].outputs, output, (size_t)olen);
 
+    timing = send_ticks && QueryPerformanceCounter(&before);
     sent = ecx_send_processdata_group(&g_ctx, 0);
+    if (timing && QueryPerformanceCounter(&after))
+        *send_ticks = after.QuadPart - before.QuadPart;
     if (sent <= 0)
         return -1;
 
+    timing = receive_ticks && QueryPerformanceCounter(&before);
     wkc = ecx_receive_processdata_group(&g_ctx, 0, EC_TIMEOUTRET);
+    if (timing && QueryPerformanceCounter(&after))
+        *receive_ticks = after.QuadPart - before.QuadPart;
     if (wkc < 0)
         return -1;
 
@@ -526,6 +535,20 @@ TB_EXPORT int tb_cycle(const uint8_t *output, int olen,
         memcpy(input, g_ctx.slavelist[1].inputs, (size_t)ilen);
 
     return wkc;
+}
+
+TB_EXPORT int tb_cycle(const uint8_t *output, int olen, uint8_t *input, int ilen)
+{
+    return tb_cycle_impl(output, olen, input, ilen, NULL, NULL);
+}
+
+/* Optional ABI v3 export. An unavailable or unattempted stage returns -1 ticks. */
+TB_EXPORT int tb_cycle_timed(const uint8_t *output, int olen, uint8_t *input, int ilen,
+                            int64_t *send_ticks, int64_t *receive_ticks)
+{
+    if (send_ticks) *send_ticks = -1;
+    if (receive_ticks) *receive_ticks = -1;
+    return tb_cycle_impl(output, olen, input, ilen, send_ticks, receive_ticks);
 }
 
 TB_EXPORT int tb_sdo(int write, uint16_t index, uint8_t sub,

@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>EtherCAT 测试台</title>
+  <link rel="stylesheet" href="styles.css">
+  <script defer src="canvas.js"></script>
+  <script defer src="pdo-values.js"></script>
+  <script defer src="connection.js"></script>
+</head>
+<body>
+  <header class="app-header">
+    <h1 class="brand"><span class="mark" aria-hidden="true"></span>EtherCAT <span>测试台</span></h1>
+    <div class="header-status" aria-label="从站通信状态">
+      <div class="state-badge" id="slave-state-badge" data-level="idle" role="status">
+        <strong id="slave-state">未连接</strong>
+      </div>
+      <span id="header-wkc" hidden></span>
+      <span id="header-al" hidden></span>
+    </div>
+  </header>
+  <main>
+    <section id="hardware">
+      <section class="panel connection" aria-label="从站连接">
+        <div class="connection-controls">
+          <label for="adapters">Npcap 网口</label>
+          <select id="adapters"><option value="">请选择专用测试网口</option></select>
+          <button type="button" id="refresh-adapters">刷新网卡</button>
+          <button type="button" id="scan" disabled>连接 / 扫描</button>
+          <button type="button" id="disconnect" disabled>断开</button>
+          <details class="slave-details">
+            <summary>从站信息</summary>
+            <dl>
+              <div><dt>厂商 ID</dt><dd id="slave-vendor">—</dd></div>
+              <div><dt>产品代码</dt><dd id="slave-product">—</dd></div>
+              <div><dt>修订号</dt><dd id="slave-revision">—</dd></div>
+              <div><dt>状态码</dt><dd id="slave-al">AL —</dd></div>
+              <div><dt>DC 能力</dt><dd id="slave-dc">—</dd></div>
+            </dl>
+          </details>
+        </div>
+        <div class="connection-controls control-row">
+          <label>PDO 周期 (ms) <input id="live-cycle-ms" type="number" min="1" max="2000" step="1" value="10"></label>
+          <button type="button" id="dc-toggle" class="dc-toggle" aria-controls="dc-settings" aria-expanded="false">DC 同步 <span id="dc-summary">未连接</span></button>
+          <label class="toggle"><input id="live-early" type="checkbox" checked> 1 ms 提前唤醒 + 短自旋</label>
+          <label for="esi-file" class="file-button">导入 ESI<input id="esi-file" type="file" accept=".xml" multiple></label>
+          <div class="device-model">
+            <span id="live-device-label">设备型号</span>
+            <span id="live-device-summary" aria-live="polite">未导入 ESI</span>
+            <select id="live-device" aria-labelledby="live-device-label" hidden></select>
+            <button type="button" id="live-use-device" hidden>使用此型号</button>
+          </div>
+        </div>
+        <div id="dc-settings" class="connection-controls control-row dc-settings" role="region" aria-label="DC 同步配置" hidden>
+          <label>模式 <select id="dc-mode"><option value="">Free Run / 禁用 SYNC0</option></select></label>
+          <label>SYNC0 (Hz) <input id="dc-hz" type="number" min="1" max="1000000" value="1000" step="any"></label>
+          <button type="button" id="dc-apply">切换到 PRE-OP 并应用</button>
+          <p id="dc-live" role="status">连接后可应用 DC 同步设置。</p>
+        </div>
+        <div class="connection-controls control-row state-row">
+          <div class="connection-controls" role="group" aria-label="从站状态切换">
+            <button type="button" data-target="1">INIT</button><button type="button" data-target="2">PRE-OP</button>
+            <button type="button" data-target="4">SAFE-OP</button><button type="button" data-target="8">OP</button>
+          </div>
+          <div class="connection-controls" role="group" aria-label="PDO 输出保护">
+            <button type="button" id="live-arm">解锁输出…</button><button type="button" id="live-lock">锁定并清零</button>
+          </div>
+          <span id="live-lock-state" role="status">输出锁定</span>
+          <p id="hardware-message" role="status">请退出同一网口上的其他主站，再选择测试网口。</p>
+        </div>
+      </section>
+      <nav id="live-tabs" class="tabs" role="tablist" aria-label="真机测试页">
+        <button type="button" role="tab" aria-selected="true" aria-controls="live-pdo">PDO 实时监视</button>
+        <button type="button" role="tab" aria-selected="false" aria-controls="live-sdo">SDO 对象字典</button>
+        <button type="button" role="tab" aria-selected="false" aria-controls="live-log">日志</button>
+        <button type="button" role="tab" aria-selected="false" aria-controls="live-hand">灵巧手</button>
+      </nav>
+
+      <section id="live-pdo" class="panel" role="tabpanel" aria-label="PDO 实时监视">
+        <div class="panel-header"><div><h2>PDO 周期间隔</h2><p id="live-timing">等待进入 SAFE-OP</p></div></div>
+        <canvas id="live-plot" role="img" aria-label="真机 PDO 周期间隔曲线"></canvas>
+        <p id="live-map-note">连接后可核对在线映射。</p>
+        <details class="raw-data"><summary>查看原始过程数据</summary><pre id="live-raw">—</pre></details>
+        <div class="data-scroll"><table><thead><tr><th>方向</th><th>PDO</th><th>索引</th><th>字段</th><th>类型</th><th>周期值</th><th>待写值</th></tr></thead><tbody id="live-pdo-rows"></tbody></table></div>
+      </section>
+
+      <section id="live-sdo" class="panel" role="tabpanel" aria-label="SDO 对象字典" hidden>
+        <div class="panel-header"><div><h2>SDO 对象字典</h2><p>权限和状态限制取自所选 ESI。</p></div>
+          <input id="sdo-filter" type="search" aria-label="筛选 SDO" placeholder="索引或字段名"></div>
+        <div class="sdo-workspace">
+          <div class="data-scroll sdo-table"><table aria-label="SDO 对象列表"><thead><tr><th>索引</th><th>名称</th><th>权限</th><th>最近读值</th></tr></thead><tbody id="sdo-rows"></tbody></table></div>
+          <section class="sdo-inspector" aria-label="SDO 对象操作">
+            <p id="sdo-empty">选择一个对象查看读写操作。</p>
+            <div id="sdo-selected" hidden>
+              <span id="sdo-address" class="sdo-address"></span>
+              <h3 id="sdo-name"></h3>
+              <dl class="sdo-fields">
+                <div><dt>类型</dt><dd id="sdo-type"></dd></div>
+                <div><dt>权限</dt><dd id="sdo-access"></dd></div>
+                <div><dt>最近读值</dt><dd id="sdo-value">—</dd></div>
+              </dl>
+              <p id="sdo-availability"></p>
+              <button type="button" id="sdo-read">读取</button>
+              <div id="sdo-write-controls">
+                <label for="sdo-input">写入值</label>
+                <div><input id="sdo-input" autocomplete="off"><button type="button" id="sdo-write">写入…</button></div>
+              </div>
+              <p id="sdo-result" role="status"></p>
+            </div>
+          </section>
+        </div>
+        <details class="sdo-manual"><summary>手工 SDO</summary><div class="connection-controls control-row">
+          <label>索引 <input id="raw-index" value="0x1018" size="7"></label>
+          <label>子索引 <input id="raw-sub" value="1" size="3"></label>
+          <label>数据 <input id="raw-input" placeholder="低字节在前，如 2A 00"></label>
+          <button type="button" id="raw-read">读取</button><button type="button" id="raw-write">写入…</button>
+          <output id="raw-result"></output>
+        </div></details>
+      </section>
+
+      <section id="live-log" class="panel" role="tabpanel" aria-label="日志" hidden>
+        <h2>诊断日志</h2>
+        <div class="connection-controls control-row">
+          <label class="toggle"><input type="checkbox" id="trace-long"> 长跑 10 分钟</label>
+          <button type="button" id="trace-start">开始逐周期采样</button>
+          <button type="button" id="trace-save">保存 PDO 计时…</button><span id="trace-state"></span>
+        </div>
+        <ol class="event-log" id="live-events"></ol>
+      </section>
+
+      <section id="live-hand" class="panel" role="tabpanel" aria-label="灵巧手" hidden>
+        <div class="panel-header"><div><h2>六轴灵巧手</h2><p id="hand-match">正在等待在线映射。</p></div>
+          <button type="button" id="hand-all">提交六轴</button></div>
+        <div class="data-scroll"><table><thead><tr><th>轴</th><th>目标角度</th><th>目标力矩</th><th>目标速度</th><th>已下发</th><th>角度反馈</th><th>力矩反馈</th><th>操作</th></tr></thead><tbody id="hand-axes"></tbody></table></div>
+        <div class="feedback live-sensors">
+          <article class="sensor"><h3>温度采样 · 64 点</h3><canvas id="hand-temperature" role="img" aria-label="在线温度热图"></canvas></article>
+          <article class="sensor"><div class="panel-header"><h3>触觉采样 · 48 点</h3><select id="hand-group" aria-label="触觉分组"><option value="0">触觉 1</option><option value="1">触觉 2</option><option value="2">触觉 3</option><option value="3">触觉 4</option><option value="4">触觉 5</option></select></div><canvas id="hand-touch" role="img" aria-label="在线触觉热图"></canvas></article>
+        </div>
+        <div class="panel-header control-row"><h3>设备信息与配置</h3><button type="button" id="hand-read">读取全部</button></div>
+        <div class="data-scroll"><table><thead><tr><th>索引</th><th>字段</th><th>类型</th><th>权限</th><th>结果</th><th>操作</th></tr></thead><tbody id="hand-config"></tbody></table></div>
+      </section>
+    </section>
+  </main>
+</body>
+</html>

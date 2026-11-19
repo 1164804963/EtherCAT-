@@ -1,0 +1,22 @@
+[package]
+name = "ethercat-monitor"
+version = "0.1.0"
+edition = "2021"
+
+[build-dependencies]
+tauri-build = "2"
+
+[dependencies]
+roxmltree = "0.21"
+serde = { version = "1", features = ["derive"] }
+tauri = "2"
+tokio = { version = "1", features = ["sync", "time"] }
+
+[target.'cfg(windows)'.dependencies]
+rfd = { version = "0.18", default-features = false }
+
+[dev-dependencies]
+tauri = { version = "2", features = ["test"] }
+
+[features]
+custom-protocol = ["tauri/custom-protocol"]
