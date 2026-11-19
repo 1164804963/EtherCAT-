@@ -10,7 +10,7 @@ using System.Windows.Forms;
 
 namespace EtherCatBench
 {
-    sealed class HardwareForm : Form
+    sealed partial class HardwareForm : Form
     {
         const int ScanUiDeadlineMs = 5000;
         const int CloseGraceMs = 1200;
@@ -56,9 +56,11 @@ namespace EtherCatBench
             body.Controls.Add(BuildHeader(out connect, out disconnect, out listAdapters, out openEsi, out demo, out states), 0, 0);
             var tabs = new TabControl { Dock = DockStyle.Fill };
             tabs.TabPages.Add(BuildPdo(out arm, out disarm, out send));
+            tabs.TabPages.Add(BuildHandTab());
             tabs.TabPages.Add(BuildSdo());
             tabs.TabPages.Add(BuildDc());
             tabs.TabPages.Add(BuildLog(out csvStart, out csvStop));
+            tabs.SelectedIndexChanged += delegate { Render(); };
             body.Controls.Add(tabs, 0, 1);
             Controls.Add(body);
             devices.SelectedIndexChanged += DeviceChanged;
@@ -321,6 +323,7 @@ namespace EtherCatBench
             if (connecting != null && connecting.ElapsedMilliseconds >= 3000)
                 request.Text = "扫站超过 3 秒，正在等待 Windows 驱动完成取消…";
             var current = bus.Frame;
+            RenderHand(current);
             string busEvent;
             while (bus.TryReadEvent(out busEvent)) AppendLog(busEvent);
             if (scanAbandoned)
@@ -416,7 +419,7 @@ namespace EtherCatBench
 
         void DrawActions(HardwareFrame current)
         {
-            if (connect == null) return;
+            if (connect == null || csvStart == null) return;
             bool ready = !busy && !closing && !closePending && !scanAbandoned;
             connect.Enabled = ready && !current.Connected && adapter.SelectedItem != null;
             disconnect.Enabled = ready && current.Connected;
@@ -431,6 +434,7 @@ namespace EtherCatBench
             send.Enabled = ready && current.Armed && current.AlMisses == 0 && HardwareBus.MatchesMapping(current, SelectedDevice);
             csvStart.Enabled = csv == null;
             csvStop.Enabled = csv != null;
+            UpdateHandActions(current, ready);
         }
 
         void SetMessage(string message)

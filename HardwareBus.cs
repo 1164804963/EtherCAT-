@@ -428,7 +428,7 @@ namespace EtherCatBench
             });
         }
 
-        public Task<byte[]> Sdo(ushort index, byte sub, byte[] value, EsiDevice device)
+        public Task<byte[]> Sdo(ushort index, byte sub, byte[] value, EsiDevice device, SdoEntry permissions = null)
         {
             return Submit(delegate {
                 RequireOnline();
@@ -441,6 +441,8 @@ namespace EtherCatBench
                     throw new InvalidOperationException("改变 PDO 映射或分配需要 PRE-OP。");
                 if (device != null && !identity.Matches(device))
                     throw new InvalidOperationException("选中的 ESI 设备与在线从站身份不符。");
+                if (permissions != null && (value == null ? !permissions.ReadableIn(state) : !permissions.WritableIn(state)))
+                    throw new InvalidOperationException("ESI 未允许在当前状态执行此 SDO 操作。");
                 return SdoTransfer(index, sub, value);
             });
         }
@@ -474,6 +476,18 @@ namespace EtherCatBench
                     offset += (int)entry.Bits;
                 }
                 throw new InvalidOperationException("该字段未分配为在线 RxPDO。");
+            });
+        }
+
+        public Task<bool> WriteHandTargets(EsiDevice device, HandTarget[] targets)
+        {
+            return Submit(delegate {
+                RequireOutputs(device);
+                if (!armed) throw new InvalidOperationException("请先解锁 PDO 输出。");
+                if (!HandPdoLayout.FromMapping(device.Fields, true).Complete)
+                    throw new InvalidOperationException("所选 ESI 的灵巧手字段或数据类型不匹配。");
+                rx = HandPdoLayout.FromMapping(actualMapping).StageTargets(rx, targets);
+                return true;
             });
         }
 

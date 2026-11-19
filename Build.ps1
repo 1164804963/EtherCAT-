@@ -38,7 +38,7 @@ try {
 
     $csc = Join-Path $env:WINDIR 'Microsoft.NET/Framework64/v4.0.30319/csc.exe'
     $executable = Join-Path $output 'EtherCatBench-Live.exe'
-    & $csc /nologo /utf8output /langversion:5 /warn:4 /optimize+ /platform:x64 /target:winexe "/out:$executable" /r:System.Windows.Forms.dll /r:System.Drawing.dll /r:System.Xml.Linq.dll Program.cs BenchForm.cs BenchModel.cs BenchLive.cs HardwareForm.cs HardwareBus.cs
+    & $csc /nologo /utf8output /langversion:5 /warn:4 /optimize+ /platform:x64 /target:winexe "/out:$executable" /r:System.Windows.Forms.dll /r:System.Drawing.dll /r:System.Xml.Linq.dll Program.cs BenchForm.cs BenchModel.cs BenchLive.cs HardwareForm.cs HardwareBus.cs HandPanel.cs HandProcessData.cs SampleMatrix.cs
     if ($LASTEXITCODE -ne 0) { throw "Windows application build failed ($LASTEXITCODE)." }
     if ($output -ne $PSScriptRoot) {
         Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'DemoESI.xml') -Destination $output

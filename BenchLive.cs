@@ -12,8 +12,12 @@ namespace EtherCatBench
     {
         public uint Index, Sub, Bits;
         public string Name, Type, Access;
+        public string ReadRestrictions, WriteRestrictions;
+        public int ReadStates, WriteStates;
         public bool Writable { get { return Access == "rw" || Access == "wo"; } }
         public bool Readable { get { return Access == "rw" || Access == "ro"; } }
+        public bool ReadableIn(int state) { return Readable && (ReadStates & state) != 0; }
+        public bool WritableIn(int state) { return Writable && (WriteStates & state) != 0; }
     }
 
     sealed class DcMode
@@ -101,11 +105,33 @@ namespace EtherCatBench
             if (index > ushort.MaxValue || sub > byte.MaxValue ||
                 Sdos.Any(s => s.Index == index && s.Sub == sub)) return;
             var flags = Child(entry, "Flags");
+            var access = flags == null ? null : Child(flags, "Access");
+            string read = access == null ? null : (string)access.Attribute("ReadRestrictions");
+            string write = access == null ? null : (string)access.Attribute("WriteRestrictions");
             Sdos.Add(new SdoEntry {
                 Index = index, Sub = sub, Name = name, Type = type,
                 Bits = OptionalNumber(Value(entry, "BitSize")),
-                Access = flags == null ? "" : Value(flags, "Access").Trim().ToLowerInvariant()
+                Access = access == null ? "" : access.Value.Trim().ToLowerInvariant(),
+                ReadRestrictions = read, WriteRestrictions = write,
+                ReadStates = AccessStates(read), WriteStates = AccessStates(write)
             });
+        }
+
+        static int AccessStates(string restrictions)
+        {
+            if (restrictions == null) return 2 | 4 | 8;
+            int mask = 0;
+            foreach (string state in restrictions.Trim().ToUpperInvariant().Split('_'))
+            {
+                switch (state)
+                {
+                    case "PREOP": mask |= 2; break;
+                    case "SAFEOP": mask |= 4; break;
+                    case "OP": mask |= 8; break;
+                    default: return 0;
+                }
+            }
+            return mask;
         }
     }
 
