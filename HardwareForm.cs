@@ -56,10 +56,10 @@ namespace EtherCatBench
             body.Controls.Add(BuildHeader(out connect, out disconnect, out listAdapters, out openEsi, out demo, out states), 0, 0);
             var tabs = new TabControl { Dock = DockStyle.Fill };
             tabs.TabPages.Add(BuildPdo(out arm, out disarm, out send));
-            tabs.TabPages.Add(BuildHandTab());
             tabs.TabPages.Add(BuildSdo());
             tabs.TabPages.Add(BuildDc());
             tabs.TabPages.Add(BuildLog(out csvStart, out csvStop));
+            tabs.TabPages.Add(BuildHandTab());
             tabs.SelectedIndexChanged += delegate { Render(); };
             body.Controls.Add(tabs, 0, 1);
             Controls.Add(body);
