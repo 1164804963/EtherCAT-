@@ -88,28 +88,7 @@
       <section id="live-sdo" class="panel" role="tabpanel" aria-label="SDO 对象字典" hidden>
         <div class="panel-header"><div><h2>SDO 对象字典</h2><p>权限和状态限制取自所选 ESI。</p></div>
           <input id="sdo-filter" type="search" aria-label="筛选 SDO" placeholder="索引或字段名"></div>
-        <div class="sdo-workspace">
-          <div class="data-scroll sdo-table"><table aria-label="SDO 对象列表"><thead><tr><th>索引</th><th>名称</th><th>权限</th><th>最近读值</th></tr></thead><tbody id="sdo-rows"></tbody></table></div>
-          <section class="sdo-inspector" aria-label="SDO 对象操作">
-            <p id="sdo-empty">选择一个对象查看读写操作。</p>
-            <div id="sdo-selected" hidden>
-              <span id="sdo-address" class="sdo-address"></span>
-              <h3 id="sdo-name"></h3>
-              <dl class="sdo-fields">
-                <div><dt>类型</dt><dd id="sdo-type"></dd></div>
-                <div><dt>权限</dt><dd id="sdo-access"></dd></div>
-                <div><dt>最近读值</dt><dd id="sdo-value">—</dd></div>
-              </dl>
-              <p id="sdo-availability"></p>
-              <button type="button" id="sdo-read">读取</button>
-              <div id="sdo-write-controls">
-                <label for="sdo-input">写入值</label>
-                <div><input id="sdo-input" autocomplete="off"><button type="button" id="sdo-write">写入…</button></div>
-              </div>
-              <p id="sdo-result" role="status"></p>
-            </div>
-          </section>
-        </div>
+        <div id="sdo-dictionary"></div>
         <details class="sdo-manual"><summary>手工 SDO</summary><div class="connection-controls control-row">
           <label>索引 <input id="raw-index" value="0x1018" size="7"></label>
           <label>子索引 <input id="raw-sub" value="1" size="3"></label>
@@ -138,9 +117,33 @@
           <article class="sensor"><div class="panel-header"><h3>触觉采样 · 48 点</h3><select id="hand-group" aria-label="触觉分组"><option value="0">触觉 1</option><option value="1">触觉 2</option><option value="2">触觉 3</option><option value="3">触觉 4</option><option value="4">触觉 5</option></select></div><canvas id="hand-touch" role="img" aria-label="在线触觉热图"></canvas></article>
         </div>
         <div class="panel-header control-row"><h3>设备信息与配置</h3><button type="button" id="hand-read">读取全部</button></div>
-        <div class="data-scroll"><table><thead><tr><th>索引</th><th>字段</th><th>类型</th><th>权限</th><th>结果</th><th>操作</th></tr></thead><tbody id="hand-config"></tbody></table></div>
+        <div id="hand-sdo-dictionary"></div>
       </section>
     </section>
   </main>
+  <template id="sdo-dictionary-template">
+    <div class="sdo-workspace">
+      <div class="data-scroll sdo-table"><table aria-label="SDO 对象列表"><thead><tr><th>索引</th><th>名称</th><th>权限</th><th>最近读值</th></tr></thead><tbody data-part="rows"></tbody></table></div>
+      <section class="sdo-inspector" aria-label="SDO 对象操作">
+        <p data-part="empty">选择一个对象查看读写操作。</p>
+        <div data-part="selected" hidden>
+          <span data-part="address" class="sdo-address"></span>
+          <h3 data-part="name"></h3>
+          <dl class="sdo-fields">
+            <div><dt>类型</dt><dd data-part="type"></dd></div>
+            <div><dt>权限</dt><dd data-part="access"></dd></div>
+            <div><dt>最近读值</dt><dd data-part="value">—</dd></div>
+          </dl>
+          <p data-part="availability"></p>
+          <button type="button" data-part="read">读取</button>
+          <div data-part="write-controls">
+            <label data-write-label>写入值</label>
+            <div><input data-part="input" autocomplete="off"><button type="button" data-part="write">写入…</button></div>
+          </div>
+          <p data-part="result" role="status"></p>
+        </div>
+      </section>
+    </div>
+  </template>
 </body>
 </html>

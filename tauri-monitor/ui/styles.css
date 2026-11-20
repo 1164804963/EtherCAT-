@@ -126,11 +126,11 @@ button:disabled, input:disabled, select:disabled { opacity: .5; cursor: default;
 .sdo-fields dt { color: var(--subtle); }
 .sdo-fields dd { margin: 0; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
 .sdo-inspector button { min-width: 0; padding: 6px 11px; }
-#sdo-write-controls { margin-top: 12px; }
-#sdo-write-controls > div { display: flex; gap: 6px; margin-top: 4px; }
-#sdo-input { width: 100%; min-width: 0; }
-#sdo-write { flex: none; }
-#sdo-result:not(:empty), #sdo-availability:not(:empty) { margin: 8px 0; overflow-wrap: anywhere; }
+.sdo-inspector [data-part="write-controls"] { margin-top: 12px; }
+.sdo-inspector [data-part="write-controls"] > div { display: flex; gap: 6px; margin-top: 4px; }
+.sdo-inspector [data-part="input"] { width: 100%; min-width: 0; }
+.sdo-inspector [data-part="write"] { flex: none; }
+.sdo-inspector p:not(:empty) { margin: 8px 0; overflow-wrap: anywhere; }
 .sdo-manual summary { cursor: pointer; }
 .event-log { max-height: 390px; overflow: auto; padding: 0 0 0 27px; color: var(--subtle); }
 .live-sensors { margin-top: 17px; }

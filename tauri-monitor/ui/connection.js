@@ -31,11 +31,10 @@
   let busy = false;
   let timeline = [];
   let pdoRows = [];
-  let sdoRows = [];
-  let sdoSelection = null;
-  let selectedSdoRow = null;
   const sdoResults = new Map();
-  let handRows = [];
+  const sdoDictionary = createDictionary("sdo","sdo-rows");
+  const handDictionary = createDictionary("hand-sdo","hand-config");
+  const dictionaries = [sdoDictionary,handDictionary];
   let axes = [];
   let handRx = new Map(), handTx = new Map();
   let permissions = "";
@@ -136,24 +135,9 @@
       axis.inputs.forEach(el => { el.disabled = !handEditable; });
     }
     const mailbox = !busy && validMailbox();
-    for (const row of handRows) {
-      row.read.disabled = !mailbox || !frame.identity_matches || !(row.entry.read_states & state);
-      row.write.disabled = row.edit.disabled = !mailbox || !frame.identity_matches || !(row.entry.write_states & state);
-    }
-    if (selectedSdoRow) {
-      const {entry} = selectedSdoRow;
-      const canAccess = mailbox && frame.identity_matches;
-      const readable = !!(entry.read_states & state);
-      const writable = !!(entry.write_states & state);
-      byId("sdo-read").disabled = !canAccess || !readable;
-      byId("sdo-write").disabled = byId("sdo-input").disabled = !canAccess || !writable;
-      const availability = !frame.connected ? "连接从站后可操作。" :
-        !frame.online ? "等待从站响应。" : !frame.identity_matches ? "当前 ESI 与从站身份未匹配。" :
-        frame.armed ? "锁定 PDO 输出后可操作。" : !readable && !writable ? "当前状态下无可用操作。" :
-        entry.write_states && !writable ? "当前状态下不可写入。" : entry.read_states && !readable ? "当前状态下不可读取。" : "";
-      setText(byId("sdo-availability"), availability);
-    }
-    byId("hand-read").disabled = !mailbox || !frame.identity_matches || !handRows.some(row => row.entry.read_states & state);
+    for (const dictionary of dictionaries) refreshDictionaryControls(dictionary,mailbox);
+    byId("hand-read").disabled = !mailbox || !frame.identity_matches ||
+      ![...handDictionary.rows.values()].some(row => row.entry.read_states & state);
     byId("raw-read").disabled = byId("raw-write").disabled = !mailbox;
     byId("dc-apply").disabled = busy || !frame.online || (!!byId("dc-mode").value && (!frame.identity_matches || !frame.slave?.dc));
     byId("dc-hz").disabled = busy || !byId("dc-mode").value;
@@ -168,7 +152,7 @@
       layout.device.identity[key] === next.device.identity[key]);
     layout = next ?? emptyLayout;
     if (!sameDevice) {
-      sdoSelection = null;
+      for (const dictionary of dictionaries) dictionary.selection = null;
       sdoResults.clear();
     }
     const models = layout.options.map(([name,id]) => `${name} · ${hex(id.product,8)}/${hex(id.revision,8)}`);
@@ -227,31 +211,39 @@
     if (!pdoRows.length) cell(body.insertRow(),"未导入 ESI，或暂无在线 PDO 字段。").colSpan = 7;
   }
 
-  function buildDictionary(body, entries) {
-    body.replaceChildren();
-    const bindings = entries.map(entry => {
-      const row = body.insertRow();
-      for (const value of [addr(entry),entry.name,entry.kind + (entry.bits ? " · " + entry.bits + " bit" : ""),entry.access || "未声明"]) cell(row,value);
-      const result = cell(row,"—");
-      const edit = input("SDO 值 " + addr(entry));
-      edit.size = 6;
-      const readButton = button("读取", () => run("读取 " + addr(entry), () => readSdo(entry,result)));
-      const write = button("写入…", () => {
-        if (confirm("确认写入 " + addr(entry) + "？")) run("写入 " + addr(entry), () => readSdo(entry,result,edit.value));
-      });
-      cell(row).append(readButton, edit, write);
-      return {entry,result,edit,read:readButton,write};
-    });
-    if (!entries.length) cell(body.insertRow(),"没有可显示的 ESI 条目。").colSpan = 6;
-    return bindings;
+  function createDictionary(prefix, bodyId) {
+    const content = byId("sdo-dictionary-template").content.cloneNode(true);
+    const nodes = Object.fromEntries([...content.querySelectorAll("[data-part]")].map(node => [node.dataset.part,node]));
+    for (const [part,node] of Object.entries(nodes)) node.id = part === "rows" ? bodyId : prefix + "-" + part;
+    content.querySelector("[data-write-label]").htmlFor = nodes.input.id;
+    byId(prefix + "-dictionary").append(content);
+    const dictionary = {nodes, rows:new Map(), selection:null, selected:null};
+    nodes.read.addEventListener("click", () => operateSdo(dictionary,false));
+    nodes.write.addEventListener("click", () => operateSdo(dictionary,true));
+    return dictionary;
   }
 
-  function buildSdoList() {
-    const entries = layout.device?.entries ?? [];
-    const query = byId("sdo-filter").value.trim().toLowerCase();
-    const body = byId("sdo-rows");
+  function refreshDictionaryControls({nodes,selected}, mailbox) {
+    if (!selected) return;
+    const {entry} = selected;
+    const state = frame.status.state;
+    const canAccess = mailbox && frame.identity_matches;
+    const readable = !!(entry.read_states & state);
+    const writable = !!(entry.write_states & state);
+    nodes.read.disabled = !canAccess || !readable;
+    nodes.write.disabled = nodes.input.disabled = !canAccess || !writable;
+    const availability = !frame.connected ? "连接从站后可操作。" :
+      !frame.online ? "等待从站响应。" : !frame.identity_matches ? "当前 ESI 与从站身份未匹配。" :
+      frame.armed ? "锁定 PDO 输出后可操作。" : !readable && !writable ? "当前状态下无可用操作。" :
+      entry.write_states && !writable ? "当前状态下不可写入。" : entry.read_states && !readable ? "当前状态下不可读取。" : "";
+    setText(nodes.availability,availability);
+  }
+
+  function buildDictionary(dictionary, entries, emptyMessage) {
+    const body = dictionary.nodes.rows;
     body.replaceChildren();
-    sdoRows = entries.filter(entry => (addr(entry) + " " + entry.name + " " + entry.kind).toLowerCase().includes(query)).map(entry => {
+    dictionary.rows.clear();
+    for (const entry of entries) {
       const key = fieldKey(entry.index,entry.sub);
       const row = body.insertRow();
       cell(row,addr(entry));
@@ -259,95 +251,91 @@
       const select = document.createElement("button");
       select.type = "button";
       select.textContent = entry.name || addr(entry);
-      select.setAttribute("aria-label", `${addr(entry)} ${entry.name}`.trim());
+      select.setAttribute("aria-label", (addr(entry) + " " + entry.name).trim());
       name.append(select);
       cell(row,entry.access || "未声明");
       const value = cell(row,sdoResults.get(key)?.value ?? "—");
       row.addEventListener("click", () => {
-        if (sdoSelection !== key) {
-          sdoSelection = key;
-          showSdoSelection();
+        if (dictionary.selection !== key) {
+          dictionary.selection = key;
+          showSdoSelection(dictionary);
         }
       });
-      return {entry,key,select,value};
-    });
-    if (!sdoRows.length) {
-      const empty = !layout.device ? "导入并选择 ESI 设备后查看对象。" : "当前 ESI 没有可显示的对象。";
-      cell(body.insertRow(), entries.length ? "没有符合筛选条件的对象。" : empty).colSpan = 4;
+      dictionary.rows.set(key,{entry,key,select,value});
     }
-    showSdoSelection();
+    if (!dictionary.rows.size) cell(body.insertRow(),emptyMessage).colSpan = 4;
+    showSdoSelection(dictionary);
   }
 
-  function showSdoSelection() {
-    selectedSdoRow = sdoRows.find(row => row.key === sdoSelection) ?? null;
-    for (const row of sdoRows) row.select.setAttribute("aria-pressed", String(row === selectedSdoRow));
-    byId("sdo-empty").hidden = !!selectedSdoRow;
-    byId("sdo-selected").hidden = !selectedSdoRow;
-    byId("sdo-input").value = "";
-    if (selectedSdoRow) {
-      const {entry,key} = selectedSdoRow;
+  function showSdoSelection(dictionary) {
+    const {nodes,rows} = dictionary;
+    const selected = dictionary.selected = rows.get(dictionary.selection) ?? null;
+    for (const row of rows.values()) row.select.setAttribute("aria-pressed", String(row === selected));
+    nodes.empty.hidden = !!selected;
+    nodes.selected.hidden = !selected;
+    nodes.input.value = "";
+    if (selected) {
+      const {entry,key} = selected;
       const saved = sdoResults.get(key);
-      setText(byId("sdo-address"),addr(entry));
-      setText(byId("sdo-name"),entry.name || "未命名对象");
-      setText(byId("sdo-type"),entry.kind + (entry.bits ? ` · ${entry.bits} bit` : ""));
-      setText(byId("sdo-access"),entry.access || "未声明");
-      setText(byId("sdo-value"),saved?.value ?? "—");
-      setText(byId("sdo-result"),saved?.message ?? "");
-      byId("sdo-read").hidden = !entry.read_states;
-      byId("sdo-write-controls").hidden = !entry.write_states;
+      setText(nodes.address,addr(entry));
+      setText(nodes.name,entry.name || "未命名对象");
+      setText(nodes.type,entry.kind + (entry.bits ? " · " + entry.bits + " bit" : ""));
+      setText(nodes.access,entry.access || "未声明");
+      setText(nodes.value,saved?.value ?? "—");
+      setText(nodes.result,saved?.message ?? "");
+      nodes.read.hidden = !entry.read_states;
+      nodes["write-controls"].hidden = !entry.write_states;
     }
-    refreshControls(true);
+    refreshDictionaryControls(dictionary,!busy && validMailbox());
+  }
+
+  function buildSdoList() {
+    const entries = layout.device?.entries ?? [];
+    const query = byId("sdo-filter").value.trim().toLowerCase();
+    const visible = entries.filter(entry => (addr(entry) + " " + entry.name + " " + entry.kind).toLowerCase().includes(query));
+    const empty = !layout.device ? "导入并选择 ESI 设备后查看对象。" : "当前 ESI 没有可显示的对象。";
+    buildDictionary(sdoDictionary,visible,entries.length ? "没有符合筛选条件的对象。" : empty);
   }
 
   function buildSdo() {
     const entries = layout.device?.entries ?? [];
-    handRows = buildDictionary(byId("hand-config"), entries.filter(entry => {
+    const handEntries = entries.filter(entry => {
       if (entry.index !== 0x8000 && entry.index !== 0x9000) return false;
       return entry.sub !== 0 || !entries.some(other => other.index === entry.index && other.sub !== 0);
-    }).sort((a,b) => b.index - a.index || a.sub - b.sub));
+    }).sort((a,b) => b.index - a.index || a.sub - b.sub);
+    buildDictionary(handDictionary,handEntries,layout.device ? "当前 ESI 没有可显示的设备配置对象。" : "导入并选择 ESI 设备后查看对象。");
     buildSdoList();
   }
 
-  async function transferSdo(entry, value) {
-    const {value: bytes, message, read_back} = await control({kind:"sdo", index:entry.index, sub:entry.sub, value:value ?? null});
-    return {text:decode(Uint8Array.from(bytes),entry.kind,entry.bits), message, readBack:read_back};
-  }
-
-  function operateSdo(write) {
-    if (!selectedSdoRow) return;
-    const row = selectedSdoRow;
-    const {entry,key} = row;
-    const value = write ? byId("sdo-input").value : null;
+  function operateSdo({nodes,selected}, write) {
+    if (!selected) return;
+    const {entry} = selected;
+    const value = write ? nodes.input.value : null;
     if (write && !confirm("确认写入 " + addr(entry) + "？")) return;
-    run((write ? "写入 " : "读取 ") + addr(entry), async () => {
-      const saved = sdoResults.get(key) ?? {value:"—", message:""};
-      sdoResults.set(key,saved);
-      try {
-        const reply = await transferSdo(entry,value);
-        if (reply.readBack) saved.value = reply.text;
-        saved.message = reply.message;
-        return reply.message;
-      } catch (error) {
-        saved.message = String(error);
-        throw error;
-      } finally {
-        setText(row.value,saved.value);
-        if (selectedSdoRow === row) {
-          setText(byId("sdo-value"),saved.value);
-          setText(byId("sdo-result"),saved.message);
-        }
-      }
-    });
+    run((write ? "写入 " : "读取 ") + addr(entry), () => transferSdo(entry,value));
   }
 
-  async function readSdo(entry, result, value) {
+  async function transferSdo(entry, value = null) {
+    const key = fieldKey(entry.index,entry.sub);
+    const saved = sdoResults.get(key) ?? {value:"—", message:""};
+    sdoResults.set(key,saved);
     try {
-      const reply = await transferSdo(entry,value);
-      result.textContent = reply.text + " · " + reply.message;
+      const reply = await control({kind:"sdo", index:entry.index, sub:entry.sub, value});
+      if (reply.read_back) saved.value = decode(Uint8Array.from(reply.value),entry.kind,entry.bits);
+      saved.message = reply.message;
       return reply.message;
     } catch (error) {
-      result.textContent = String(error);
+      saved.message = String(error);
       throw error;
+    } finally {
+      for (const {nodes,rows,selected} of dictionaries) {
+        const row = rows.get(key);
+        if (row) setText(row.value,saved.value);
+        if (selected?.key === key) {
+          setText(nodes.value,saved.value);
+          setText(nodes.result,saved.message);
+        }
+      }
     }
   }
 
@@ -616,15 +604,13 @@
   });
   byId("live-lock").addEventListener("click", () => run("锁定并清零", () => control({kind:"arm",enabled:false})));
   byId("sdo-filter").addEventListener("input", buildSdoList);
-  byId("sdo-read").addEventListener("click", () => operateSdo(false));
-  byId("sdo-write").addEventListener("click", () => operateSdo(true));
   byId("hand-all").addEventListener("click", () => sendAxes([0,1,2,3,4,5]));
   byId("hand-group").addEventListener("change", scheduleRender);
   byId("hand-read").addEventListener("click", () => run("批量读取设备信息与配置", async () => {
     let readCount = 0, failed = 0, skipped = 0;
-    for (const {entry,result} of handRows) {
-      if (!(entry.read_states & frame.status.state)) { result.textContent = "跳过"; skipped++; continue; }
-      try { await readSdo(entry,result); readCount++; } catch { failed++; }
+    for (const {entry} of handDictionary.rows.values()) {
+      if (!(entry.read_states & frame.status.state)) { skipped++; continue; }
+      try { await transferSdo(entry); readCount++; } catch { failed++; }
     }
     return "读取完毕 · 成功 " + readCount + " · 失败 " + failed + " · 跳过 " + skipped;
   }));
